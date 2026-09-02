@@ -1,0 +1,59 @@
+{
+  "name": "@genoventures-labs/namethis",
+  "version": "0.1.0",
+  "description": "Lightweight, repo-aware project naming CLI powered by RoundRobin free Zen model router",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "namethis": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "instructs.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobbybacklogs/namethis.git"
+  },
+  "homepage": "https://github.com/bobbybacklogs/namethis#readme",
+  "bugs": {
+    "url": "https://github.com/bobbybacklogs/namethis/issues"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "tsc -w",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "cli",
+    "naming",
+    "project-names",
+    "ai",
+    "developer-tools",
+    "roundrobin",
+    "zen-models",
+    "branding"
+  ],
+  "author": "genoventures-labs",
+  "license": "MIT",
+  "dependencies": {
+    "@genoventures-labs/roundrobin": "^1.0.0",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
