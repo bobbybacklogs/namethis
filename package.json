@@ -1,7 +1,7 @@
 {
   "name": "@genoventures-labs/namethis",
-  "version": "0.1.0",
-  "description": "Lightweight, repo-aware project naming CLI powered by RoundRobin free Zen model router",
+  "version": "0.2.0",
+  "description": "Lightweight, repo-aware project naming CLI powered by ModelHitch",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -37,16 +37,16 @@
     "project-names",
     "ai",
     "developer-tools",
-    "roundrobin",
-    "zen-models",
+    "modelhitch",
+    "vercel-ai-gateway",
     "branding"
   ],
   "author": "genoventures-labs",
   "license": "MIT",
   "dependencies": {
-    "@genoventures-labs/roundrobin": "^1.0.0",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
+    "modelhitch": "^2.0.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {

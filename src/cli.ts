@@ -17,6 +17,8 @@ import {
 
 dotenv.config();
 
+const VERSION = '0.2.0';
+
 const program = new Command();
 
 program
@@ -24,21 +26,23 @@ program
   .description(
     'A lightweight, repo-aware naming tool that infers top 2-3 names with a short rationale from your current directory or specified path.'
   )
-  .version('0.1.0', '-v, --version', 'Output current version')
+  .version(VERSION, '-v, --version', 'Output current version')
   .argument('[dir]', 'Directory path to analyze', '.')
   .option('-c, --count <number>', 'Number of name suggestions to generate (default: 3)', '3')
   .option('--context <text>', 'Additional context, target audience, or requirements')
-  .option('-k, --key <api-key>', 'OpenCode Zen API key (or set OPENCODE_ZEN_API_KEY env)')
-  .option('-m, --model <model>', 'Specific model override to use in router')
+  .option('-k, --key <api-key>', 'AI Gateway API key (or set AI_GATEWAY_API_KEY env)')
+  .option('-p, --provider <provider>', 'Primary ModelHitch provider (default: vercel-ai-gateway)')
+  .option('-m, --model <model>', 'Specific model override (e.g. openai/gpt-5.4)')
   .option('-t, --temperature <number>', 'Temperature for generation (default: 0.7)', '0.7')
-  .option('--ollama <host>', 'Custom Ollama host endpoint for fallback (default: http://localhost:11434)')
+  .option('--ollama <host>', 'Custom Ollama host for local fallback (default: http://localhost:11434)')
+  .option('--ollama-model <model>', 'Ollama model tag used on local fallback (default: llama3.2)')
   .option('--json', 'Output results purely in JSON format for scripting/piping')
   .option('--inspect', 'Only inspect and print scanned directory context without making LLM calls')
   .helpOption('-h, --help', 'Display help menu');
 
-program.action(async (dir: string, options: any) => {
+program.action(async (dir: string, options: Record<string, unknown>) => {
   const isJson = Boolean(options.json);
-  const targetDir = path.resolve(dir || '.');
+  const targetDir = path.resolve((dir as string) || '.');
 
   try {
     if (options.inspect) {
@@ -49,7 +53,7 @@ program.action(async (dir: string, options: any) => {
         renderHeader();
         renderScanSummary(scan);
         console.log(`  ${pc.bold('Scanned Files Sample:')}`);
-        scan.detectedFiles.slice(0, 20).forEach(f => console.log(`    ${pc.gray('•')} ${f}`));
+        scan.detectedFiles.slice(0, 20).forEach((f) => console.log(`    ${pc.gray('•')} ${f}`));
         if (scan.readmeSnippet) {
           console.log(`\n  ${pc.bold('Readme Excerpt:')}`);
           console.log(`    ${pc.gray(scan.readmeSnippet.replace(/\n/g, '\n    '))}`);
@@ -63,43 +67,54 @@ program.action(async (dir: string, options: any) => {
       renderHeader();
     }
 
-    const count = parseInt(options.count, 10) || 3;
-    const temperature = parseFloat(options.temperature) || 0.7;
+    const count = parseInt(String(options.count), 10) || 3;
+    const temperature = parseFloat(String(options.temperature)) || 0.7;
 
     const engine = new NameThisEngine({
-      apiKey: options.key,
-      ollamaHost: options.ollama
+      apiKey: options.key as string | undefined,
+      provider: options.provider as string | undefined,
+      model: options.model as string | undefined,
+      ollamaHost: options.ollama as string | undefined,
+      ollamaModel: options.ollamaModel as string | undefined,
     });
 
     if (!isJson) {
       const scan = await scanDirectory(targetDir);
       renderScanSummary(scan);
-      renderProgress(`Inferring ${count} grounded names with RoundRobin router...`);
+      renderProgress(`Inferring ${count} grounded names with ModelHitch...`);
     }
 
     const result = await engine.generateNames({
       cwd: targetDir,
       count,
-      context: options.context,
-      apiKey: options.key,
-      model: options.model,
+      context: options.context as string | undefined,
+      apiKey: options.key as string | undefined,
+      provider: options.provider as string | undefined,
+      model: options.model as string | undefined,
       temperature,
-      ollamaHost: options.ollama,
-      onModelRotated: (from, to, reason) => {
+      ollamaHost: options.ollama as string | undefined,
+      ollamaModel: options.ollamaModel as string | undefined,
+      onFailover: (event) => {
         if (!isJson) {
-          renderEvent('rotation', `${from} -> ${to} (${reason})`);
+          const reason = event.error.message || event.error.code;
+          renderEvent(
+            'rotation',
+            `${event.from.providerId}/${event.from.model} -> ${event.to.providerId}/${event.to.model} (${reason})`
+          );
+          if (event.to.providerId === 'ollama') {
+            renderEvent('ollama', `Switched to Ollama (${event.to.model})`);
+          }
         }
       },
-      onModelExhausted: (model, cooldown) => {
+      onExhausted: (info) => {
         if (!isJson) {
-          renderEvent('exhausted', `${model} exhausted (cooldown: ${Math.round(cooldown / 1000)}s)`);
+          const last = info.attempts[info.attempts.length - 1];
+          const detail = last
+            ? `${last.target.providerId}/${last.target.model}: ${last.error.message}`
+            : 'all lanes failed';
+          renderEvent('exhausted', detail);
         }
       },
-      onOllamaFallback: (models) => {
-        if (!isJson) {
-          renderEvent('ollama', `Switched to Ollama (${models.join(', ') || 'local'})`);
-        }
-      }
     });
 
     if (isJson) {
@@ -110,7 +125,7 @@ program.action(async (dir: string, options: any) => {
             stack: result.scan.languages,
             model: result.modelUsed,
             provider: result.providerUsed,
-            suggestions: result.suggestions
+            suggestions: result.suggestions,
           },
           null,
           2
@@ -119,40 +134,66 @@ program.action(async (dir: string, options: any) => {
     } else {
       renderSuggestions(result.suggestions, {
         model: result.modelUsed,
-        provider: result.providerUsed
+        provider: result.providerUsed,
       });
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     if (isJson) {
-      console.error(JSON.stringify({ error: err.message || String(err) }));
+      console.error(JSON.stringify({ error: message }));
     } else {
       renderError(
-        err.message || 'An unexpected error occurred',
-        'Verify your connection, models, or optionally provide an OPENCODE_ZEN_API_KEY / Ollama instance.'
+        message || 'An unexpected error occurred',
+        'Set AI_GATEWAY_API_KEY (or run `vercel login`), pass --key, or ensure a local Ollama instance is reachable.'
       );
     }
     process.exit(1);
   }
 });
 
-// Extra commands
 program
   .command('models')
-  .description('List available models and current router status from RoundRobin')
-  .action(() => {
-    const engine = new NameThisEngine();
-    const models = engine.getRoundRobin().getModels();
-    renderHeader();
-    console.log(`  ${pc.bold('AVAILABLE ROUTER MODELS')}`);
-    console.log(`  ${pc.dim('─'.repeat(50))}`);
-    for (const m of models) {
-      const status = m.isExhausted ? pc.red('[EXHAUSTED]') : pc.green('[ACTIVE]');
-      console.log(`  ${status} ${pc.bold(pc.white(m.model.id))} ${pc.dim(`(${m.model.provider})`)}`);
-      if (m.model.description) {
-        console.log(`       ${pc.gray(m.model.description)}`);
+  .description('List ModelHitch providers and discoverable models')
+  .option('-p, --provider <provider>', 'Only list models for a specific provider')
+  .option('-k, --key <api-key>', 'AI Gateway API key (or set AI_GATEWAY_API_KEY env)')
+  .option('--ollama <host>', 'Custom Ollama host (default: http://localhost:11434)')
+  .action(async (options: Record<string, unknown>) => {
+    try {
+      const engine = new NameThisEngine({
+        apiKey: options.key as string | undefined,
+        ollamaHost: options.ollama as string | undefined,
+      });
+
+      renderHeader();
+      console.log(`  ${pc.bold('MODELHITCH PROVIDERS')}`);
+      console.log(`  ${pc.dim('─'.repeat(50))}`);
+      for (const provider of engine.listProviders()) {
+        console.log(`  ${pc.green('[READY]')} ${pc.bold(pc.white(provider.id))}`);
       }
+
+      console.log(`\n  ${pc.bold('DISCOVERED MODELS')}`);
+      console.log(`  ${pc.dim('─'.repeat(50))}`);
+      const listings = await engine.listModels(options.provider as string | undefined);
+      for (const listing of listings) {
+        if (listing.models.length === 0) {
+          console.log(`  ${pc.dim(listing.providerId)} ${pc.gray('(none discovered / unavailable)')}`);
+          continue;
+        }
+        console.log(`  ${pc.bold(listing.providerId)}`);
+        for (const model of listing.models.slice(0, 20)) {
+          const name = model.name ? pc.dim(`— ${model.name}`) : '';
+          console.log(`    ${pc.white(model.id)} ${name}`);
+        }
+        if (listing.models.length > 20) {
+          console.log(`    ${pc.dim(`…and ${listing.models.length - 20} more`)}`);
+        }
+      }
+      console.log(`  ${pc.dim('─'.repeat(50))}\n`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      renderError(message, 'Gateway listing needs AI_GATEWAY_API_KEY; Ollama listing needs a running Ollama host.');
+      process.exit(1);
     }
-    console.log(`  ${pc.dim('─'.repeat(50))}\n`);
   });
 
 program.parse(process.argv);

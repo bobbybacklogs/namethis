@@ -13,7 +13,7 @@
 
 `namethis` is a lightweight, repo-aware naming tool that looks at the project in your current directory, figures out what you’re building, and suggests 2–3 strong names with a short rationale for each.
 
-It uses RoundRobin to route across free Zen models, giving you quick, grounded naming suggestions without leaving your terminal or overthinking the prompt.
+It uses [ModelHitch](https://github.com/bobbybacklogs/ModelHitch) to hitch any model via Vercel AI Gateway (BYOK), with automatic failover and optional local Ollama fallback.
 
 ---
 
@@ -21,7 +21,7 @@ It uses RoundRobin to route across free Zen models, giving you quick, grounded n
 
 - **Repo-Aware Context**: Automatically analyzes project structure, file signatures, manifests, and documentation.
 - **Grounded Suggestions**: Curates 2–3 strong, realistic name options (avoiding generic AI buzzwords or cliché patterns).
-- **Free Model Routing**: Built on top of RoundRobin for automatic rotation across free models with local Ollama fallback.
+- **ModelHitch Routing**: Chat through Vercel AI Gateway with BYOK, lane failover, and Ollama as a local fallback.
 - **Clean CLI Experience**: Monospace, distraction-free terminal formatting with zero emojis.
 - **Dual Support**: Use directly from your terminal with `npx` or import programmatically in TypeScript / JavaScript.
 
@@ -47,6 +47,21 @@ npm install -g @genoventures-labs/namethis
 npm install @genoventures-labs/namethis
 ```
 
+### Credentials
+
+Set one of these for live Gateway calls (preferred):
+
+```bash
+export AI_GATEWAY_API_KEY=…   # or VERCEL_OIDC_TOKEN / VERCEL_TOKEN
+# or: vercel login
+```
+
+Optional local fallback:
+
+```bash
+export OLLAMA_HOST=http://localhost:11434
+```
+
 ---
 
 ## Usage
@@ -69,6 +84,11 @@ namethis ./path/to/project
 |---|---|
 | `-c, --count <n>` | Number of name candidates (default: 3) |
 | `--context <text>` | Extra background, audience, or product nuances |
+| `-k, --key <api-key>` | AI Gateway API key (`AI_GATEWAY_API_KEY`) |
+| `-p, --provider <id>` | Primary ModelHitch provider (default: `vercel-ai-gateway`) |
+| `-m, --model <id>` | Model override (e.g. `openai/gpt-5.4`) |
+| `--ollama <host>` | Ollama host for local fallback |
+| `--ollama-model <tag>` | Ollama model tag (default: `llama3.2`) |
 | `--inspect` | Preview scanned files and metadata without querying models |
 | `--json` | Return output in raw JSON format |
 | `-h, --help` | Show full help menu |
@@ -88,6 +108,11 @@ namethis -c 5
 **Inspect parsed repo context:**
 ```bash
 namethis --inspect
+```
+
+**List providers / models:**
+```bash
+namethis models
 ```
 
 ---
