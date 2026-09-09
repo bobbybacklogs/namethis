@@ -15,9 +15,9 @@ import {
   renderError
 } from './ui.js';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 
 const program = new Command();
 
@@ -116,6 +116,10 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
         }
       },
     });
+
+    if (!isJson && result.providerUsed === 'ollama') {
+      renderEvent('ollama', `Using ${result.providerUsed}/${result.modelUsed}`);
+    }
 
     if (isJson) {
       console.log(
