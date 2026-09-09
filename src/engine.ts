@@ -4,6 +4,7 @@ import {
   defaultProviders,
   DEFAULT_FAILOVER_LANES,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL,
+  readVercelCliAuthToken,
   type ContentPart,
   type FailoverEvent,
   type ExhaustionInfo,
@@ -52,34 +53,57 @@ export interface NameThisEngineOptions {
 }
 
 function resolveOllamaHost(host?: string): string {
-  return host || process.env.OLLAMA_HOST || 'http://localhost:11434';
+  return (host || process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
 }
 
-function resolveOllamaModel(model?: string): string {
-  return model || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
-}
-
-function resolveDefaultProvider(provider?: string): string {
-  return (
-    provider ||
-    process.env.NAMETHIS_PROVIDER ||
-    'vercel-ai-gateway'
+function hasCloudCredentials(apiKey?: string): boolean {
+  return Boolean(
+    apiKey?.trim() ||
+      process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim() ||
+      process.env.VERCEL_TOKEN?.trim() ||
+      process.env.OPENAI_API_KEY?.trim() ||
+      readVercelCliAuthToken()
   );
 }
 
-function resolveDefaultModel(model?: string): string {
+function pickOllamaModel(available: string[], preferred?: string): string | undefined {
+  if (available.length === 0) return preferred;
+
+  if (preferred) {
+    if (available.includes(preferred)) return preferred;
+    const tagged = available.find(
+      (name) => name === preferred || name.startsWith(`${preferred}:`)
+    );
+    if (tagged) return tagged;
+  }
+
   return (
-    model ||
-    process.env.NAMETHIS_MODEL ||
-    VERCEL_AI_GATEWAY_DEFAULT_MODEL
+    available.find((name) => name === 'llama3.2' || name.startsWith('llama3.2:')) ||
+    available.find((name) => name.startsWith('llama3')) ||
+    available.find((name) => name.startsWith('llama')) ||
+    available.find((name) => name.startsWith('qwen')) ||
+    available[0]
   );
 }
 
-function buildProviders(ollamaHost?: string): Provider[] {
-  const host = resolveOllamaHost(ollamaHost);
+async function discoverOllamaModels(host: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${host}/api/tags`);
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { models?: Array<{ name?: string }> };
+    return (payload.models ?? [])
+      .map((model) => model.name?.trim())
+      .filter((name): name is string => Boolean(name));
+  } catch {
+    return [];
+  }
+}
+
+function buildProviders(ollamaHost: string): Provider[] {
   return [
     ...defaultProviders.filter((provider) => provider.id !== 'ollama'),
-    createOllamaProvider({ baseUrl: host }),
+    createOllamaProvider({ baseUrl: ollamaHost }),
   ];
 }
 
@@ -101,13 +125,19 @@ export class NameThisEngine {
   private apiKey?: string;
   private ollamaHost: string;
   private ollamaModel: string;
+  private preferredProvider?: string;
+  private preferredModel?: string;
 
   constructor(options: NameThisEngineOptions = {}) {
     this.apiKey = options.apiKey;
     this.ollamaHost = resolveOllamaHost(options.ollamaHost);
-    this.ollamaModel = resolveOllamaModel(options.ollamaModel);
-    this.activeProvider = resolveDefaultProvider(options.provider);
-    this.activeModel = resolveDefaultModel(options.model);
+    this.ollamaModel = options.ollamaModel || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
+    this.preferredProvider = options.provider || process.env.NAMETHIS_PROVIDER;
+    this.preferredModel = options.model || process.env.NAMETHIS_MODEL;
+    this.activeProvider = this.preferredProvider || 'vercel-ai-gateway';
+    this.activeModel =
+      this.preferredModel ||
+      (this.activeProvider === 'ollama' ? this.ollamaModel : VERCEL_AI_GATEWAY_DEFAULT_MODEL);
 
     this.hitch = this.createHitch({
       onFailover: options.onFailover,
@@ -147,9 +177,7 @@ export class NameThisEngine {
   }
 
   async listModels(providerId?: string): Promise<{ providerId: string; models: ModelInfo[] }[]> {
-    const ids = providerId
-      ? [providerId]
-      : ['vercel-ai-gateway', 'ollama'];
+    const ids = providerId ? [providerId] : ['vercel-ai-gateway', 'ollama'];
 
     const results: { providerId: string; models: ModelInfo[] }[] = [];
     for (const id of ids) {
@@ -171,15 +199,40 @@ export class NameThisEngine {
     return undefined;
   }
 
+  private async resolveRouting(options: GenerateNamesOptions): Promise<void> {
+    if (options.apiKey) this.apiKey = options.apiKey;
+    if (options.ollamaHost) this.ollamaHost = resolveOllamaHost(options.ollamaHost);
+    if (options.provider) this.preferredProvider = options.provider;
+    if (options.model) this.preferredModel = options.model;
+
+    const preferredOllama =
+      options.ollamaModel || process.env.NAMETHIS_OLLAMA_MODEL || this.ollamaModel || 'llama3.2';
+    const available = await discoverOllamaModels(this.ollamaHost);
+    this.ollamaModel = pickOllamaModel(available, preferredOllama) || preferredOllama;
+
+    if (this.preferredProvider) {
+      this.activeProvider = this.preferredProvider;
+      this.activeModel =
+        this.preferredModel ||
+        (this.activeProvider === 'ollama' ? this.ollamaModel : VERCEL_AI_GATEWAY_DEFAULT_MODEL);
+      return;
+    }
+
+    if (!hasCloudCredentials(this.apiKey) && available.length > 0) {
+      this.activeProvider = 'ollama';
+      this.activeModel = this.ollamaModel;
+      return;
+    }
+
+    this.activeProvider = 'vercel-ai-gateway';
+    this.activeModel = this.preferredModel || VERCEL_AI_GATEWAY_DEFAULT_MODEL;
+  }
+
   async generateNames(options: GenerateNamesOptions = {}): Promise<GenerateNamesResult> {
     const targetDir = options.cwd || process.cwd();
     const count = options.count && options.count > 0 ? options.count : 3;
 
-    if (options.apiKey) this.apiKey = options.apiKey;
-    if (options.ollamaHost) this.ollamaHost = resolveOllamaHost(options.ollamaHost);
-    if (options.ollamaModel) this.ollamaModel = resolveOllamaModel(options.ollamaModel);
-    if (options.provider) this.activeProvider = resolveDefaultProvider(options.provider);
-    if (options.model) this.activeModel = resolveDefaultModel(options.model);
+    await this.resolveRouting(options);
 
     this.hitch = this.createHitch({
       onFailover: options.onFailover,
