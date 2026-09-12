@@ -1,4 +1,5 @@
 import {
+  MemoryKeyStore,
   ModelHitch,
   createOllamaProvider,
   defaultProviders,
@@ -10,7 +11,13 @@ import {
   type ModelInfo,
   type Provider,
 } from 'modelhitch';
-import { hasCloudCredentials, resolveCloudApiKey } from './credentials.js';
+import {
+  hasCloudCredentials,
+  hasGatewayCredentials,
+  resolveDirectOpenAIApiKey,
+  resolveGatewayApiKey,
+} from './credentials.js';
+import { scanCharBudget } from './context-budget.js';
 import { scanDirectory, formatScanContext, ProjectScanResult } from './scanner.js';
 import { getSystemInstructions } from './instructions.js';
 
@@ -123,6 +130,7 @@ export class NameThisEngine {
   private ollamaModel: string;
   private explicitProvider?: string;
   private explicitModel?: string;
+  private readonly keystore = new MemoryKeyStore();
 
   constructor(options: NameThisEngineOptions = {}) {
     this.apiKey = options.apiKey;
@@ -139,6 +147,16 @@ export class NameThisEngine {
     });
   }
 
+  private async syncKeystore(): Promise<void> {
+    const gatewayKey = resolveGatewayApiKey(this.apiKey);
+    if (gatewayKey) await this.keystore.set('vercel-ai-gateway', gatewayKey);
+    else await this.keystore.delete('vercel-ai-gateway');
+
+    const openAiKey = resolveDirectOpenAIApiKey();
+    if (openAiKey) await this.keystore.set('openai', openAiKey);
+    else await this.keystore.delete('openai');
+  }
+
   private createHitch(hooks?: {
     onFailover?: (event: FailoverEvent) => void;
     onExhausted?: (info: ExhaustionInfo) => void;
@@ -147,6 +165,7 @@ export class NameThisEngine {
       providers: buildProviders(this.ollamaHost),
       defaultProviderId: this.activeProvider,
       defaultModel: this.activeModel,
+      keystore: this.keystore,
       autoMode: {
         lanes: [
           ...DEFAULT_FAILOVER_LANES,
@@ -186,9 +205,13 @@ export class NameThisEngine {
   }
 
   private credentialsFor(providerId: string): { apiKey?: string } | undefined {
-    if (!this.apiKey) return undefined;
-    if (providerId === 'vercel-ai-gateway' || providerId === this.activeProvider) {
-      return { apiKey: this.apiKey };
+    if (providerId === 'vercel-ai-gateway') {
+      const gatewayKey = resolveGatewayApiKey(this.apiKey);
+      return gatewayKey ? { apiKey: gatewayKey } : undefined;
+    }
+    if (providerId === 'openai') {
+      const openAiKey = resolveDirectOpenAIApiKey();
+      return openAiKey ? { apiKey: openAiKey } : undefined;
     }
     return undefined;
   }
@@ -214,7 +237,7 @@ export class NameThisEngine {
         this.activeProvider === 'ollama'
           ? this.explicitModel || this.ollamaModel
           : resolveDefaultModel(this.explicitModel);
-      this.apiKey = resolveCloudApiKey(this.apiKey);
+      this.apiKey = resolveGatewayApiKey(this.apiKey);
       return;
     }
 
@@ -224,9 +247,13 @@ export class NameThisEngine {
       return;
     }
 
-    this.activeProvider = resolveDefaultProvider();
-    this.activeModel = resolveDefaultModel(this.explicitModel);
-    this.apiKey = resolveCloudApiKey(this.apiKey);
+    this.activeProvider = hasGatewayCredentials(this.apiKey)
+      ? resolveDefaultProvider()
+      : 'openai';
+    this.activeModel = this.activeProvider === 'openai'
+      ? resolveDefaultModel(this.explicitModel)
+      : resolveDefaultModel(this.explicitModel);
+    this.apiKey = resolveGatewayApiKey(this.apiKey);
   }
 
   async generateNames(options: GenerateNamesOptions = {}): Promise<GenerateNamesResult> {
@@ -234,6 +261,7 @@ export class NameThisEngine {
     const count = options.count && options.count > 0 ? options.count : 3;
 
     await this.resolveRouting(options);
+    await this.syncKeystore();
 
     this.hitch = this.createHitch({
       onFailover: options.onFailover,
@@ -241,8 +269,11 @@ export class NameThisEngine {
     });
 
     const scan = await scanDirectory(targetDir, { crawl: options.crawl });
-    const scannedContext = formatScanContext(scan, options.context);
     const systemInstructions = getSystemInstructions();
+    const scannedContext = formatScanContext(scan, {
+      customContext: options.context,
+      maxChars: scanCharBudget(this.activeProvider, this.activeModel),
+    });
 
     const prompt = `You are namethis, an intelligent repo-aware naming tool.
 Carefully review the analyzed workspace metadata, directory structure, readme, and code signatures below.
@@ -255,7 +286,7 @@ Infer what this software tool / application / library / product is building.
 Generate exactly ${count} strong, grounded name suggestions with a 2-3 line rationale for each.
 
 STRICT GUIDELINES:
-${systemInstructions}
+Follow the system message naming rules exactly.
 
 FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS (valid JSON array of objects):
 \`\`\`json
@@ -286,7 +317,6 @@ Respond ONLY with the JSON code block.`;
     const response = await this.hitch.chat({
       provider: providerUsed,
       model: modelUsed,
-      apiKey: resolveCloudApiKey(this.apiKey),
       temperature: options.temperature ?? 0.7,
       messages: [
         { role: 'system', content: systemInstructions },

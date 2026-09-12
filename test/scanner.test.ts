@@ -77,7 +77,7 @@ describe('scanDirectory', () => {
         (sum, snippet) => sum + snippet.excerpt.length,
         0
       );
-      assert.ok(totalBytes <= 30000);
+      assert.ok(totalBytes <= 8000);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

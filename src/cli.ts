@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import pc from 'picocolors';
 import { NameThisEngine } from './engine.js';
+import { formatGenerationFailure } from './errors.js';
 import { scanDirectory } from './scanner.js';
 import {
   renderHeader,
@@ -156,14 +157,11 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
       });
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = formatGenerationFailure(err);
     if (isJson) {
-      console.error(JSON.stringify({ error: message }));
+      console.error(JSON.stringify({ error: failure.message, hint: failure.hint }));
     } else {
-      renderError(
-        message || 'An unexpected error occurred',
-        'Set AI_GATEWAY_API_KEY (or run `vercel login`), pass --key, or ensure a local Ollama instance is reachable.'
-      );
+      renderError(failure.message || 'An unexpected error occurred', failure.hint);
     }
     process.exit(1);
   }

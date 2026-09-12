@@ -3,3 +3,5 @@ export * from './scanner.js';
 export * from './instructions.js';
 export * from './ui.js';
 export * from './credentials.js';
+export * from './context-budget.js';
+export * from './errors.js';

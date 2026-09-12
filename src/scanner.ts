@@ -53,9 +53,9 @@ const DEFAULT_MAX_SCAN_DEPTH = 3;
 const DEFAULT_MAX_FILES_LISTED = 60;
 const CRAWL_MAX_SCAN_DEPTH = 6;
 const CRAWL_MAX_FILES_LISTED = 150;
-const CRAWL_MAX_SNIPPETS = 25;
-const CRAWL_MAX_FILE_BYTES = 2000;
-const CRAWL_MAX_TOTAL_BYTES = 30000;
+const CRAWL_MAX_SNIPPETS = 12;
+const CRAWL_MAX_FILE_BYTES = 1200;
+const CRAWL_MAX_TOTAL_BYTES = 8000;
 const MAX_README_CHARS = 1200;
 
 const CONTENT_EXTENSIONS = new Set([
@@ -340,7 +340,20 @@ export async function scanDirectory(
   };
 }
 
-export function formatScanContext(scan: ProjectScanResult, customContext?: string): string {
+export interface FormatScanContextOptions {
+  customContext?: string;
+  maxChars?: number;
+}
+
+export function formatScanContext(
+  scan: ProjectScanResult,
+  customContextOrOptions?: string | FormatScanContextOptions
+): string {
+  const options: FormatScanContextOptions =
+    typeof customContextOrOptions === 'string'
+      ? { customContext: customContextOrOptions }
+      : (customContextOrOptions ?? {});
+  const customContext = options.customContext;
   const parts: string[] = [];
 
   parts.push(`Target Directory: ${scan.dirName}`);
@@ -401,5 +414,31 @@ export function formatScanContext(scan: ProjectScanResult, customContext?: strin
     parts.push(`Additional User Provided Context:\n${customContext}`);
   }
 
-  return parts.join('\n\n');
+  let formatted = parts.join('\n\n');
+  if (options.maxChars !== undefined && formatted.length > options.maxChars) {
+    formatted = trimFormattedContext(parts, options.maxChars);
+  }
+  return formatted;
+}
+
+function trimFormattedContext(parts: string[], maxChars: number): string {
+  const notice = '\n\n[context truncated for model context limits]';
+  const budget = Math.max(maxChars - notice.length, 0);
+  const kept: string[] = [];
+  let used = 0;
+
+  for (const part of parts) {
+    if (used >= budget) break;
+    const remaining = budget - used;
+    if (part.length <= remaining) {
+      kept.push(part);
+      used += part.length + 2;
+      continue;
+    }
+
+    kept.push(`${part.slice(0, Math.max(remaining - 1, 0)).trimEnd()}…`);
+    break;
+  }
+
+  return `${kept.join('\n\n')}${notice}`;
 }

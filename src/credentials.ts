@@ -39,7 +39,7 @@ function vercelCliAuthPaths(): string[] {
   return [...new Set(paths)];
 }
 
-function readVercelCliAuthToken(): string | undefined {
+export function readVercelCliAuthToken(): string | undefined {
   if (process.env.MODELHITCH_SKIP_VERCEL_CLI_AUTH === '1') return undefined;
   for (const candidate of vercelCliAuthPaths()) {
     if (!fs.existsSync(candidate)) continue;
@@ -55,16 +55,46 @@ function readVercelCliAuthToken(): string | undefined {
   return undefined;
 }
 
-/** Resolve a gateway/OpenAI credential for namethis without printing secrets. */
-export function resolveCloudApiKey(explicit?: string): string | undefined {
+/** Credentials accepted by Vercel AI Gateway as Bearer tokens. */
+export function resolveGatewayApiKey(explicit?: string): string | undefined {
   if (explicit?.trim()) return explicit.trim();
   if (process.env.AI_GATEWAY_API_KEY?.trim()) return process.env.AI_GATEWAY_API_KEY.trim();
   if (process.env.VERCEL_OIDC_TOKEN?.trim()) return process.env.VERCEL_OIDC_TOKEN.trim();
-  if (process.env.VERCEL_TOKEN?.trim()) return process.env.VERCEL_TOKEN.trim();
-  if (process.env.OPENAI_API_KEY?.trim()) return process.env.OPENAI_API_KEY.trim();
-  return readVercelCliAuthToken();
+  return undefined;
+}
+
+/** Direct OpenAI key used by the OpenAI failover lane. */
+export function resolveDirectOpenAIApiKey(): string | undefined {
+  return process.env.OPENAI_API_KEY?.trim() || undefined;
+}
+
+/**
+ * Legacy helper retained for callers that need any cloud-ish credential.
+ * Prefer resolveGatewayApiKey / resolveDirectOpenAIApiKey for routing.
+ */
+export function resolveCloudApiKey(explicit?: string): string | undefined {
+  return resolveGatewayApiKey(explicit) || resolveDirectOpenAIApiKey();
+}
+
+export function hasGatewayCredentials(explicit?: string): boolean {
+  return Boolean(resolveGatewayApiKey(explicit));
+}
+
+export function hasDirectOpenAICredentials(): boolean {
+  return Boolean(resolveDirectOpenAIApiKey());
 }
 
 export function hasCloudCredentials(explicit?: string): boolean {
-  return Boolean(resolveCloudApiKey(explicit));
+  return hasGatewayCredentials(explicit) || hasDirectOpenAICredentials();
+}
+
+export function hasVercelCliToken(): boolean {
+  return Boolean(process.env.VERCEL_TOKEN?.trim() || readVercelCliAuthToken());
+}
+
+/** Explain the common `vercel login` vs AI Gateway key mismatch. */
+export function getVercelTokenMisconfiguration(): string | undefined {
+  if (hasGatewayCredentials() || hasDirectOpenAICredentials()) return undefined;
+  if (!hasVercelCliToken()) return undefined;
+  return 'Found a Vercel CLI token, but AI Gateway requires AI_GATEWAY_API_KEY (or VERCEL_OIDC_TOKEN). `vercel login` alone is not enough for cloud model calls.';
 }
