@@ -4,7 +4,7 @@ import { NameSuggestion } from './engine.js';
 
 export function renderHeader(): void {
   const brand = pc.bold(pc.cyan('namethis'));
-  const tag = pc.dim('v0.3.0');
+  const tag = pc.dim('v0.3.1');
   const subtitle = pc.gray('Repo-aware intelligent naming CLI');
   console.log(`\n  ${brand} ${tag} ${pc.dim('—')} ${subtitle}\n`);
 }

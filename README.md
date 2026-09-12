@@ -144,6 +144,12 @@ for (const item of result.suggestions) {
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md). Current release: **0.3.1**.
+
+---
+
 ## License
 
 [MIT](LICENSE)
