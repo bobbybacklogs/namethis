@@ -24,6 +24,7 @@ export interface GenerateNamesOptions {
   cwd?: string;
   count?: number;
   context?: string;
+  crawl?: boolean;
   apiKey?: string;
   provider?: string;
   model?: string;
@@ -239,7 +240,7 @@ export class NameThisEngine {
       onExhausted: options.onExhausted,
     });
 
-    const scan = await scanDirectory(targetDir);
+    const scan = await scanDirectory(targetDir, { crawl: options.crawl });
     const scannedContext = formatScanContext(scan, options.context);
     const systemInstructions = getSystemInstructions();
 

@@ -22,7 +22,10 @@ export function renderScanSummary(scan: ProjectScanResult): void {
   }
 
   console.log(`  ${pc.dim('│')} ${parts.join(pc.dim('  •  '))}`);
-  console.log(`  ${pc.dim('│')} ${pc.dim(`Scanned ${scan.detectedFiles.length} file signatures and context markers`)}`);
+  const scanMode = scan.crawlEnabled ? 'deep crawl' : 'surface scan';
+  console.log(
+    `  ${pc.dim('│')} ${pc.dim(`Scanned ${scan.detectedFiles.length} file signatures (${scanMode})`)}`
+  );
   console.log(`  ${pc.dim('│')}`);
 }
 
