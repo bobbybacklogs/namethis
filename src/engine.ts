@@ -10,7 +10,12 @@ import {
   type ModelInfo,
   type Provider,
 } from 'modelhitch';
-import { hasCloudCredentials, resolveCloudApiKey } from './credentials.js';
+import {
+  findConfiguredProvider,
+  hasCloudCredentials,
+  resolveExplicitApiKey,
+} from './credentials.js';
+import { scanCharBudget } from './context-budget.js';
 import { scanDirectory, formatScanContext, ProjectScanResult } from './scanner.js';
 import { getSystemInstructions } from './instructions.js';
 
@@ -118,14 +123,14 @@ export class NameThisEngine {
   private hitch: ModelHitch;
   private activeProvider: string;
   private activeModel: string;
-  private apiKey?: string;
+  private explicitApiKey?: string;
   private ollamaHost: string;
   private ollamaModel: string;
   private explicitProvider?: string;
   private explicitModel?: string;
 
   constructor(options: NameThisEngineOptions = {}) {
-    this.apiKey = options.apiKey;
+    this.explicitApiKey = resolveExplicitApiKey(options.apiKey);
     this.ollamaHost = resolveOllamaHost(options.ollamaHost);
     this.ollamaModel = options.ollamaModel || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
     this.explicitProvider = options.provider || process.env.NAMETHIS_PROVIDER;
@@ -176,7 +181,7 @@ export class NameThisEngine {
     const results: { providerId: string; models: ModelInfo[] }[] = [];
     for (const id of ids) {
       try {
-        const models = await this.hitch.listModels(id, this.credentialsFor(id));
+        const models = await this.hitch.listModels(id, this.chatCredentials(id));
         results.push({ providerId: id, models });
       } catch {
         results.push({ providerId: id, models: [] });
@@ -185,16 +190,18 @@ export class NameThisEngine {
     return results;
   }
 
-  private credentialsFor(providerId: string): { apiKey?: string } | undefined {
-    if (!this.apiKey) return undefined;
-    if (providerId === 'vercel-ai-gateway' || providerId === this.activeProvider) {
-      return { apiKey: this.apiKey };
-    }
+  /** Match Dirgest: only forward an explicit CLI key; otherwise let each provider read env. */
+  private chatCredentials(providerId: string): { apiKey?: string } | undefined {
+    const explicit = resolveExplicitApiKey(this.explicitApiKey);
+    if (!explicit) return undefined;
+    if (providerId === 'vercel-ai-gateway') return { apiKey: explicit };
     return undefined;
   }
 
   private async resolveRouting(options: GenerateNamesOptions): Promise<void> {
-    if (options.apiKey) this.apiKey = options.apiKey;
+    const providers = buildProviders(this.ollamaHost);
+    const explicitApiKey = resolveExplicitApiKey(options.apiKey);
+    if (explicitApiKey) this.explicitApiKey = explicitApiKey;
     if (options.ollamaHost) this.ollamaHost = resolveOllamaHost(options.ollamaHost);
     if (options.provider) this.explicitProvider = options.provider;
     if (options.model) this.explicitModel = options.model;
@@ -214,19 +221,18 @@ export class NameThisEngine {
         this.activeProvider === 'ollama'
           ? this.explicitModel || this.ollamaModel
           : resolveDefaultModel(this.explicitModel);
-      this.apiKey = resolveCloudApiKey(this.apiKey);
       return;
     }
 
-    if (!hasCloudCredentials(this.apiKey)) {
+    const configuredProvider = findConfiguredProvider(providers);
+    if (!hasCloudCredentials(this.explicitApiKey, providers)) {
       this.activeProvider = 'ollama';
       this.activeModel = this.ollamaModel;
       return;
     }
 
-    this.activeProvider = resolveDefaultProvider();
+    this.activeProvider = configuredProvider?.id || resolveDefaultProvider();
     this.activeModel = resolveDefaultModel(this.explicitModel);
-    this.apiKey = resolveCloudApiKey(this.apiKey);
   }
 
   async generateNames(options: GenerateNamesOptions = {}): Promise<GenerateNamesResult> {
@@ -241,8 +247,11 @@ export class NameThisEngine {
     });
 
     const scan = await scanDirectory(targetDir, { crawl: options.crawl });
-    const scannedContext = formatScanContext(scan, options.context);
     const systemInstructions = getSystemInstructions();
+    const scannedContext = formatScanContext(scan, {
+      customContext: options.context,
+      maxChars: scanCharBudget(this.activeProvider, this.activeModel),
+    });
 
     const prompt = `You are namethis, an intelligent repo-aware naming tool.
 Carefully review the analyzed workspace metadata, directory structure, readme, and code signatures below.
@@ -255,7 +264,7 @@ Infer what this software tool / application / library / product is building.
 Generate exactly ${count} strong, grounded name suggestions with a 2-3 line rationale for each.
 
 STRICT GUIDELINES:
-${systemInstructions}
+Follow the system message naming rules exactly.
 
 FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS (valid JSON array of objects):
 \`\`\`json
@@ -282,11 +291,12 @@ Respond ONLY with the JSON code block.`;
 
     const providerUsed = this.activeProvider;
     const modelUsed = this.activeModel;
+    const explicitApiKey = resolveExplicitApiKey(options.apiKey ?? this.explicitApiKey);
 
     const response = await this.hitch.chat({
       provider: providerUsed,
       model: modelUsed,
-      apiKey: resolveCloudApiKey(this.apiKey),
+      ...(explicitApiKey ? { apiKey: explicitApiKey } : {}),
       temperature: options.temperature ?? 0.7,
       messages: [
         { role: 'system', content: systemInstructions },

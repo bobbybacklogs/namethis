@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { Provider } from 'modelhitch';
 
 const APP_DIR = 'com.vercel.cli';
 const AUTH_FILE = 'auth.json';
@@ -39,7 +40,7 @@ function vercelCliAuthPaths(): string[] {
   return [...new Set(paths)];
 }
 
-function readVercelCliAuthToken(): string | undefined {
+export function readVercelCliAuthToken(): string | undefined {
   if (process.env.MODELHITCH_SKIP_VERCEL_CLI_AUTH === '1') return undefined;
   for (const candidate of vercelCliAuthPaths()) {
     if (!fs.existsSync(candidate)) continue;
@@ -55,16 +56,54 @@ function readVercelCliAuthToken(): string | undefined {
   return undefined;
 }
 
-/** Resolve a gateway/OpenAI credential for namethis without printing secrets. */
-export function resolveCloudApiKey(explicit?: string): string | undefined {
-  if (explicit?.trim()) return explicit.trim();
-  if (process.env.AI_GATEWAY_API_KEY?.trim()) return process.env.AI_GATEWAY_API_KEY.trim();
-  if (process.env.VERCEL_OIDC_TOKEN?.trim()) return process.env.VERCEL_OIDC_TOKEN.trim();
-  if (process.env.VERCEL_TOKEN?.trim()) return process.env.VERCEL_TOKEN.trim();
-  if (process.env.OPENAI_API_KEY?.trim()) return process.env.OPENAI_API_KEY.trim();
-  return readVercelCliAuthToken();
+/** Only pass keys the user supplied explicitly (for example via --key). */
+export function resolveExplicitApiKey(explicit?: string): string | undefined {
+  const trimmed = explicit?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-export function hasCloudCredentials(explicit?: string): boolean {
-  return Boolean(resolveCloudApiKey(explicit));
+type ProviderCredentialFields = Provider & {
+  apiKeyEnvVar?: string;
+  apiKeyEnvFallbacks?: string[];
+  config?: {
+    apiKeyEnvVar?: string;
+    apiKeyEnvFallbacks?: string[];
+  };
+};
+
+/**
+ * ModelHitch V2 keeps OpenAI-compatible credential env names on the private
+ * `config` object; other providers expose them directly (same as Dirgest).
+ */
+export function providerCredentialEnvNames(provider: Provider): string[] {
+  const fields = provider as ProviderCredentialFields;
+  const primary = fields.apiKeyEnvVar ?? fields.config?.apiKeyEnvVar;
+  const fallbacks = fields.apiKeyEnvFallbacks ?? fields.config?.apiKeyEnvFallbacks ?? [];
+  return [primary, ...fallbacks].filter((name): name is string => Boolean(name));
+}
+
+export function hasConfiguredProviderCredential(
+  provider: Provider,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return providerCredentialEnvNames(provider).some((name) => Boolean(env[name]?.trim()));
+}
+
+export function findConfiguredProvider(providers: Provider[]): Provider | undefined {
+  return providers.find((provider) => hasConfiguredProviderCredential(provider));
+}
+
+export function hasCloudCredentials(
+  explicit?: string,
+  providers: Provider[] = []
+): boolean {
+  if (resolveExplicitApiKey(explicit)) return true;
+  if (providers.some((provider) => hasConfiguredProviderCredential(provider))) return true;
+  return Boolean(
+    process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim() ||
+      process.env.OPENAI_API_KEY?.trim() ||
+      process.env.VERCEL_TOKEN?.trim() ||
+      readVercelCliAuthToken()
+  );
 }
