@@ -17,7 +17,7 @@ import {
 
 dotenv.config({ quiet: true });
 
-const VERSION = '0.2.1';
+const VERSION = '0.3.0';
 
 const program = new Command();
 

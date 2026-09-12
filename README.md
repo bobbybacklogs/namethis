@@ -20,6 +20,7 @@ It uses [ModelHitch](https://github.com/bobbybacklogs/ModelHitch) to hitch any m
 ## Highlights
 
 - **Repo-Aware Context**: Automatically analyzes project structure, file signatures, manifests, and documentation.
+- **Deep Crawl Mode**: Optional `--crawl` walks the tree with bounded depth, file count, and excerpt size for richer naming context.
 - **Grounded Suggestions**: Curates 2–3 strong, realistic name options (avoiding generic AI buzzwords or cliché patterns).
 - **ModelHitch Routing**: Chat through Vercel AI Gateway with BYOK, lane failover, and Ollama as a local fallback.
 - **Clean CLI Experience**: Monospace, distraction-free terminal formatting with zero emojis.
@@ -90,6 +91,7 @@ namethis ./path/to/project
 | `--ollama <host>` | Ollama host for local fallback |
 | `--ollama-model <tag>` | Ollama model tag (default: `llama3.2`) |
 | `--inspect` | Preview scanned files and metadata without querying models |
+| `--crawl` | Deep-crawl the directory tree for richer naming context (bounded depth, file count, and size) |
 | `--json` | Return output in raw JSON format |
 | `-h, --help` | Show full help menu |
 
@@ -110,6 +112,12 @@ namethis -c 5
 namethis --inspect
 ```
 
+**Deep-crawl for richer context (large or nested repos):**
+```bash
+namethis --crawl
+namethis ./path/to/project --crawl --inspect
+```
+
 **List providers / models:**
 ```bash
 namethis models
@@ -124,7 +132,8 @@ import { generateNames } from '@genoventures-labs/namethis';
 
 const result = await generateNames({
   cwd: './my-app',
-  count: 3
+  count: 3,
+  crawl: true, // optional: deep-crawl for richer context
 });
 
 for (const item of result.suggestions) {

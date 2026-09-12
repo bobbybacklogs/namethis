@@ -1,10 +1,17 @@
 {
   "name": "@genoventures-labs/namethis",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Lightweight, repo-aware project naming CLI powered by ModelHitch",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "namethis": "dist/cli.js"
   },
