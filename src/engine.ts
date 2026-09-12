@@ -1,5 +1,4 @@
 import {
-  MemoryKeyStore,
   ModelHitch,
   createOllamaProvider,
   defaultProviders,
@@ -12,10 +11,9 @@ import {
   type Provider,
 } from 'modelhitch';
 import {
+  findConfiguredProvider,
   hasCloudCredentials,
-  hasGatewayCredentials,
-  resolveDirectOpenAIApiKey,
-  resolveGatewayApiKey,
+  resolveExplicitApiKey,
 } from './credentials.js';
 import { scanCharBudget } from './context-budget.js';
 import { scanDirectory, formatScanContext, ProjectScanResult } from './scanner.js';
@@ -125,15 +123,14 @@ export class NameThisEngine {
   private hitch: ModelHitch;
   private activeProvider: string;
   private activeModel: string;
-  private apiKey?: string;
+  private explicitApiKey?: string;
   private ollamaHost: string;
   private ollamaModel: string;
   private explicitProvider?: string;
   private explicitModel?: string;
-  private readonly keystore = new MemoryKeyStore();
 
   constructor(options: NameThisEngineOptions = {}) {
-    this.apiKey = options.apiKey;
+    this.explicitApiKey = resolveExplicitApiKey(options.apiKey);
     this.ollamaHost = resolveOllamaHost(options.ollamaHost);
     this.ollamaModel = options.ollamaModel || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
     this.explicitProvider = options.provider || process.env.NAMETHIS_PROVIDER;
@@ -147,16 +144,6 @@ export class NameThisEngine {
     });
   }
 
-  private async syncKeystore(): Promise<void> {
-    const gatewayKey = resolveGatewayApiKey(this.apiKey);
-    if (gatewayKey) await this.keystore.set('vercel-ai-gateway', gatewayKey);
-    else await this.keystore.delete('vercel-ai-gateway');
-
-    const openAiKey = resolveDirectOpenAIApiKey();
-    if (openAiKey) await this.keystore.set('openai', openAiKey);
-    else await this.keystore.delete('openai');
-  }
-
   private createHitch(hooks?: {
     onFailover?: (event: FailoverEvent) => void;
     onExhausted?: (info: ExhaustionInfo) => void;
@@ -165,7 +152,6 @@ export class NameThisEngine {
       providers: buildProviders(this.ollamaHost),
       defaultProviderId: this.activeProvider,
       defaultModel: this.activeModel,
-      keystore: this.keystore,
       autoMode: {
         lanes: [
           ...DEFAULT_FAILOVER_LANES,
@@ -195,7 +181,7 @@ export class NameThisEngine {
     const results: { providerId: string; models: ModelInfo[] }[] = [];
     for (const id of ids) {
       try {
-        const models = await this.hitch.listModels(id, this.credentialsFor(id));
+        const models = await this.hitch.listModels(id, this.chatCredentials(id));
         results.push({ providerId: id, models });
       } catch {
         results.push({ providerId: id, models: [] });
@@ -204,20 +190,18 @@ export class NameThisEngine {
     return results;
   }
 
-  private credentialsFor(providerId: string): { apiKey?: string } | undefined {
-    if (providerId === 'vercel-ai-gateway') {
-      const gatewayKey = resolveGatewayApiKey(this.apiKey);
-      return gatewayKey ? { apiKey: gatewayKey } : undefined;
-    }
-    if (providerId === 'openai') {
-      const openAiKey = resolveDirectOpenAIApiKey();
-      return openAiKey ? { apiKey: openAiKey } : undefined;
-    }
+  /** Match Dirgest: only forward an explicit CLI key; otherwise let each provider read env. */
+  private chatCredentials(providerId: string): { apiKey?: string } | undefined {
+    const explicit = resolveExplicitApiKey(this.explicitApiKey);
+    if (!explicit) return undefined;
+    if (providerId === 'vercel-ai-gateway') return { apiKey: explicit };
     return undefined;
   }
 
   private async resolveRouting(options: GenerateNamesOptions): Promise<void> {
-    if (options.apiKey) this.apiKey = options.apiKey;
+    const providers = buildProviders(this.ollamaHost);
+    const explicitApiKey = resolveExplicitApiKey(options.apiKey);
+    if (explicitApiKey) this.explicitApiKey = explicitApiKey;
     if (options.ollamaHost) this.ollamaHost = resolveOllamaHost(options.ollamaHost);
     if (options.provider) this.explicitProvider = options.provider;
     if (options.model) this.explicitModel = options.model;
@@ -237,23 +221,18 @@ export class NameThisEngine {
         this.activeProvider === 'ollama'
           ? this.explicitModel || this.ollamaModel
           : resolveDefaultModel(this.explicitModel);
-      this.apiKey = resolveGatewayApiKey(this.apiKey);
       return;
     }
 
-    if (!hasCloudCredentials(this.apiKey)) {
+    const configuredProvider = findConfiguredProvider(providers);
+    if (!hasCloudCredentials(this.explicitApiKey, providers)) {
       this.activeProvider = 'ollama';
       this.activeModel = this.ollamaModel;
       return;
     }
 
-    this.activeProvider = hasGatewayCredentials(this.apiKey)
-      ? resolveDefaultProvider()
-      : 'openai';
-    this.activeModel = this.activeProvider === 'openai'
-      ? resolveDefaultModel(this.explicitModel)
-      : resolveDefaultModel(this.explicitModel);
-    this.apiKey = resolveGatewayApiKey(this.apiKey);
+    this.activeProvider = configuredProvider?.id || resolveDefaultProvider();
+    this.activeModel = resolveDefaultModel(this.explicitModel);
   }
 
   async generateNames(options: GenerateNamesOptions = {}): Promise<GenerateNamesResult> {
@@ -261,7 +240,6 @@ export class NameThisEngine {
     const count = options.count && options.count > 0 ? options.count : 3;
 
     await this.resolveRouting(options);
-    await this.syncKeystore();
 
     this.hitch = this.createHitch({
       onFailover: options.onFailover,
@@ -313,10 +291,12 @@ Respond ONLY with the JSON code block.`;
 
     const providerUsed = this.activeProvider;
     const modelUsed = this.activeModel;
+    const explicitApiKey = resolveExplicitApiKey(options.apiKey ?? this.explicitApiKey);
 
     const response = await this.hitch.chat({
       provider: providerUsed,
       model: modelUsed,
+      ...(explicitApiKey ? { apiKey: explicitApiKey } : {}),
       temperature: options.temperature ?? 0.7,
       messages: [
         { role: 'system', content: systemInstructions },

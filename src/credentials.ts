@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { Provider } from 'modelhitch';
 
 const APP_DIR = 'com.vercel.cli';
 const AUTH_FILE = 'auth.json';
@@ -55,46 +56,54 @@ export function readVercelCliAuthToken(): string | undefined {
   return undefined;
 }
 
-/** Credentials accepted by Vercel AI Gateway as Bearer tokens. */
-export function resolveGatewayApiKey(explicit?: string): string | undefined {
-  if (explicit?.trim()) return explicit.trim();
-  if (process.env.AI_GATEWAY_API_KEY?.trim()) return process.env.AI_GATEWAY_API_KEY.trim();
-  if (process.env.VERCEL_OIDC_TOKEN?.trim()) return process.env.VERCEL_OIDC_TOKEN.trim();
-  return undefined;
+/** Only pass keys the user supplied explicitly (for example via --key). */
+export function resolveExplicitApiKey(explicit?: string): string | undefined {
+  const trimmed = explicit?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-/** Direct OpenAI key used by the OpenAI failover lane. */
-export function resolveDirectOpenAIApiKey(): string | undefined {
-  return process.env.OPENAI_API_KEY?.trim() || undefined;
-}
+type ProviderCredentialFields = Provider & {
+  apiKeyEnvVar?: string;
+  apiKeyEnvFallbacks?: string[];
+  config?: {
+    apiKeyEnvVar?: string;
+    apiKeyEnvFallbacks?: string[];
+  };
+};
 
 /**
- * Legacy helper retained for callers that need any cloud-ish credential.
- * Prefer resolveGatewayApiKey / resolveDirectOpenAIApiKey for routing.
+ * ModelHitch V2 keeps OpenAI-compatible credential env names on the private
+ * `config` object; other providers expose them directly (same as Dirgest).
  */
-export function resolveCloudApiKey(explicit?: string): string | undefined {
-  return resolveGatewayApiKey(explicit) || resolveDirectOpenAIApiKey();
+export function providerCredentialEnvNames(provider: Provider): string[] {
+  const fields = provider as ProviderCredentialFields;
+  const primary = fields.apiKeyEnvVar ?? fields.config?.apiKeyEnvVar;
+  const fallbacks = fields.apiKeyEnvFallbacks ?? fields.config?.apiKeyEnvFallbacks ?? [];
+  return [primary, ...fallbacks].filter((name): name is string => Boolean(name));
 }
 
-export function hasGatewayCredentials(explicit?: string): boolean {
-  return Boolean(resolveGatewayApiKey(explicit));
+export function hasConfiguredProviderCredential(
+  provider: Provider,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return providerCredentialEnvNames(provider).some((name) => Boolean(env[name]?.trim()));
 }
 
-export function hasDirectOpenAICredentials(): boolean {
-  return Boolean(resolveDirectOpenAIApiKey());
+export function findConfiguredProvider(providers: Provider[]): Provider | undefined {
+  return providers.find((provider) => hasConfiguredProviderCredential(provider));
 }
 
-export function hasCloudCredentials(explicit?: string): boolean {
-  return hasGatewayCredentials(explicit) || hasDirectOpenAICredentials();
-}
-
-export function hasVercelCliToken(): boolean {
-  return Boolean(process.env.VERCEL_TOKEN?.trim() || readVercelCliAuthToken());
-}
-
-/** Explain the common `vercel login` vs AI Gateway key mismatch. */
-export function getVercelTokenMisconfiguration(): string | undefined {
-  if (hasGatewayCredentials() || hasDirectOpenAICredentials()) return undefined;
-  if (!hasVercelCliToken()) return undefined;
-  return 'Found a Vercel CLI token, but AI Gateway requires AI_GATEWAY_API_KEY (or VERCEL_OIDC_TOKEN). `vercel login` alone is not enough for cloud model calls.';
+export function hasCloudCredentials(
+  explicit?: string,
+  providers: Provider[] = []
+): boolean {
+  if (resolveExplicitApiKey(explicit)) return true;
+  if (providers.some((provider) => hasConfiguredProviderCredential(provider))) return true;
+  return Boolean(
+    process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim() ||
+      process.env.OPENAI_API_KEY?.trim() ||
+      process.env.VERCEL_TOKEN?.trim() ||
+      readVercelCliAuthToken()
+  );
 }

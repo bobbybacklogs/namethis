@@ -1,5 +1,4 @@
 import { isExhaustedError, type LaneAttempt } from 'modelhitch';
-import { getVercelTokenMisconfiguration } from './credentials.js';
 
 export interface FormattedFailure {
   message: string;
@@ -21,8 +20,6 @@ function isCredentialAttempt(attempt: LaneAttempt): boolean {
 }
 
 export function formatGenerationFailure(err: unknown): FormattedFailure {
-  const vercelTokenHint = getVercelTokenMisconfiguration();
-
   if (isExhaustedError(err)) {
     const attempts = err.info.attempts;
     const contextOverflow = attempts.some(isContextOverflowAttempt);
@@ -42,19 +39,11 @@ export function formatGenerationFailure(err: unknown): FormattedFailure {
       };
     }
 
-    if (allCredentialFailures && vercelTokenHint) {
-      return {
-        message: vercelTokenHint,
-        hint:
-          'Create an AI Gateway key at https://vercel.com/ai-gateway and run: export AI_GATEWAY_API_KEY=your_key. `vercel login` alone does not authorize Gateway model calls.',
-      };
-    }
-
     if (allCredentialFailures) {
       return {
         message: 'No valid AI credentials were accepted by any provider lane.',
         hint:
-          'Set AI_GATEWAY_API_KEY (https://vercel.com/ai-gateway), OPENAI_API_KEY, or ensure local Ollama is running with a model that fits the scan context.',
+          'Set AI_GATEWAY_API_KEY (https://vercel.com/ai-gateway), pass --key with your gateway key, or ensure local Ollama is running with a model that fits the scan context.',
       };
     }
 
@@ -77,16 +66,10 @@ export function formatGenerationFailure(err: unknown): FormattedFailure {
       };
     }
     if (/invalid-api-key|missing-api-key|rejected the api key/i.test(message)) {
-      if (vercelTokenHint) {
-        return {
-          message: vercelTokenHint,
-          hint:
-            'Set AI_GATEWAY_API_KEY from https://vercel.com/ai-gateway. A Vercel CLI login token is not the same credential.',
-        };
-      }
       return {
         message,
-        hint: 'Set AI_GATEWAY_API_KEY, pass --key, or use a local Ollama model.',
+        hint:
+          'Set AI_GATEWAY_API_KEY, pass --key with the same gateway key you use elsewhere, or use a local Ollama model.',
       };
     }
     return { message };

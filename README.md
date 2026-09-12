@@ -53,8 +53,9 @@ npm install @genoventures-labs/namethis
 Set one of these for live Gateway calls (preferred):
 
 ```bash
-export AI_GATEWAY_API_KEY=…   # or VERCEL_OIDC_TOKEN / VERCEL_TOKEN
-# or: vercel login
+export AI_GATEWAY_API_KEY=…   # from https://vercel.com/ai-gateway
+# or: export VERCEL_OIDC_TOKEN=…
+# or pass the same key with: namethis --key "$AI_GATEWAY_API_KEY"
 ```
 
 Optional local fallback:

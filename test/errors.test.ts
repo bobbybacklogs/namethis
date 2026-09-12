@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import { ExhaustedError } from 'modelhitch';
 import { formatGenerationFailure } from '../src/errors.js';
 
@@ -8,9 +8,7 @@ describe('formatGenerationFailure', () => {
     const err = new ExhaustedError(
       new Error('request exceeds the available context size (4096 tokens)'),
       {
-        targets: [
-          { providerId: 'ollama', model: 'deepseek-r1:7b' },
-        ],
+        targets: [{ providerId: 'ollama', model: 'deepseek-r1:7b' }],
         attempts: [
           {
             target: { providerId: 'ollama', model: 'deepseek-r1:7b' },
@@ -30,7 +28,7 @@ describe('formatGenerationFailure', () => {
     assert.match(failure.hint || '', /--crawl/i);
   });
 
-  it('explains vercel login vs gateway key mismatch', () => {
+  it('reports credential exhaustion without blaming vercel login by default', () => {
     const err = new ExhaustedError(
       new Error('invalid-api-key'),
       {
@@ -48,12 +46,9 @@ describe('formatGenerationFailure', () => {
       }
     );
 
-    process.env.VERCEL_TOKEN = 'vercel-cli-token';
-    delete process.env.AI_GATEWAY_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-
     const failure = formatGenerationFailure(err);
-    assert.match(failure.message, /AI_GATEWAY_API_KEY|Vercel CLI token/i);
-    assert.match(failure.hint || '', /vercel\.com\/ai-gateway/i);
+    assert.match(failure.message, /No valid AI credentials/i);
+    assert.match(failure.hint || '', /AI_GATEWAY_API_KEY|--key/i);
+    assert.doesNotMatch(failure.message, /vercel login/i);
   });
 });

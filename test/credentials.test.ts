@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import type { Provider } from 'modelhitch';
 import { afterEach, describe, it } from 'node:test';
 import {
-  getVercelTokenMisconfiguration,
+  findConfiguredProvider,
   hasCloudCredentials,
-  hasGatewayCredentials,
-  resolveGatewayApiKey,
+  hasConfiguredProviderCredential,
+  providerCredentialEnvNames,
+  resolveExplicitApiKey,
 } from '../src/credentials.js';
 
 const trackedKeys = [
@@ -14,6 +16,23 @@ const trackedKeys = [
   'OPENAI_API_KEY',
 ] as const;
 
+const gatewayProvider = {
+  id: 'vercel-ai-gateway',
+  name: 'Vercel AI Gateway',
+  defaultModel: 'openai/gpt-5.4',
+  config: {
+    apiKeyEnvVar: 'AI_GATEWAY_API_KEY',
+    apiKeyEnvFallbacks: ['VERCEL_OIDC_TOKEN', 'VERCEL_TOKEN'],
+  },
+} as unknown as Provider;
+
+const openAiProvider = {
+  id: 'openai',
+  name: 'OpenAI',
+  defaultModel: 'gpt-4o-mini',
+  apiKeyEnvVar: 'OPENAI_API_KEY',
+} as unknown as Provider;
+
 afterEach(() => {
   for (const key of trackedKeys) {
     delete process.env[key];
@@ -21,25 +40,37 @@ afterEach(() => {
 });
 
 describe('credentials', () => {
-  it('treats AI_GATEWAY_API_KEY as a gateway credential', () => {
-    process.env.AI_GATEWAY_API_KEY = 'gateway-key';
-    delete process.env.VERCEL_TOKEN;
+  it('only treats CLI --key as an explicit api key', () => {
+    process.env.OPENAI_API_KEY = 'openai-env-key';
+    process.env.AI_GATEWAY_API_KEY = 'gateway-env-key';
 
-    assert.equal(resolveGatewayApiKey(), 'gateway-key');
-    assert.equal(hasGatewayCredentials(), true);
-    assert.equal(hasCloudCredentials(), true);
-    assert.equal(getVercelTokenMisconfiguration(), undefined);
+    assert.equal(resolveExplicitApiKey(undefined), undefined);
+    assert.equal(resolveExplicitApiKey('  gateway-cli-key  '), 'gateway-cli-key');
   });
 
-  it('does not treat VERCEL_TOKEN as a gateway credential', () => {
-    delete process.env.AI_GATEWAY_API_KEY;
-    delete process.env.VERCEL_OIDC_TOKEN;
-    delete process.env.OPENAI_API_KEY;
-    process.env.VERCEL_TOKEN = 'vercel-cli-token';
+  it('detects configured providers the same way Dirgest does', () => {
+    assert.deepEqual(providerCredentialEnvNames(gatewayProvider), [
+      'AI_GATEWAY_API_KEY',
+      'VERCEL_OIDC_TOKEN',
+      'VERCEL_TOKEN',
+    ]);
 
-    assert.equal(resolveGatewayApiKey(), undefined);
-    assert.equal(hasGatewayCredentials(), false);
-    assert.equal(hasCloudCredentials(), false);
-    assert.match(getVercelTokenMisconfiguration() || '', /AI_GATEWAY_API_KEY/);
+    process.env.AI_GATEWAY_API_KEY = 'gateway-env-key';
+    assert.equal(hasConfiguredProviderCredential(gatewayProvider), true);
+    assert.equal(findConfiguredProvider([openAiProvider, gatewayProvider])?.id, 'vercel-ai-gateway');
+  });
+
+  it('routes to cloud when AI_GATEWAY_API_KEY is configured', () => {
+    process.env.AI_GATEWAY_API_KEY = 'gateway-env-key';
+
+    assert.equal(hasCloudCredentials(undefined, [gatewayProvider, openAiProvider]), true);
+    assert.equal(findConfiguredProvider([gatewayProvider, openAiProvider])?.id, 'vercel-ai-gateway');
+  });
+
+  it('does not treat env keys as explicit chat credentials', () => {
+    process.env.OPENAI_API_KEY = 'openai-env-key';
+    process.env.AI_GATEWAY_API_KEY = 'gateway-env-key';
+
+    assert.equal(resolveExplicitApiKey(undefined), undefined);
   });
 });
