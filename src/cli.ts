@@ -38,6 +38,7 @@ program
   .option('--ollama-model <model>', 'Ollama model tag used on local fallback (default: llama3.2)')
   .option('--json', 'Output results purely in JSON format for scripting/piping')
   .option('--inspect', 'Only inspect and print scanned directory context without making LLM calls')
+  .option('--crawl', 'Deep-crawl the directory tree for richer naming context (bounded depth, file count, and size)')
   .helpOption('-h, --help', 'Display help menu');
 
 program.action(async (dir: string, options: Record<string, unknown>) => {
@@ -45,8 +46,10 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
   const targetDir = path.resolve((dir as string) || '.');
 
   try {
+    const crawl = Boolean(options.crawl);
+
     if (options.inspect) {
-      const scan = await scanDirectory(targetDir);
+      const scan = await scanDirectory(targetDir, { crawl });
       if (isJson) {
         console.log(JSON.stringify(scan, null, 2));
       } else {
@@ -57,6 +60,16 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
         if (scan.readmeSnippet) {
           console.log(`\n  ${pc.bold('Readme Excerpt:')}`);
           console.log(`    ${pc.gray(scan.readmeSnippet.replace(/\n/g, '\n    '))}`);
+        }
+        if (scan.crawlFileSnippets && scan.crawlFileSnippets.length > 0) {
+          console.log(`\n  ${pc.bold('Crawled File Excerpts:')}`);
+          for (const snippet of scan.crawlFileSnippets.slice(0, 5)) {
+            console.log(`    ${pc.gray('•')} ${snippet.path}`);
+            console.log(`      ${pc.gray(snippet.excerpt.slice(0, 120).replace(/\n/g, ' '))}${snippet.excerpt.length > 120 ? '…' : ''}`);
+          }
+          if (scan.crawlFileSnippets.length > 5) {
+            console.log(`    ${pc.dim(`…and ${scan.crawlFileSnippets.length - 5} more excerpts`)}`);
+          }
         }
         console.log('\n');
       }
@@ -79,7 +92,7 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
     });
 
     if (!isJson) {
-      const scan = await scanDirectory(targetDir);
+      const scan = await scanDirectory(targetDir, { crawl });
       renderScanSummary(scan);
       renderProgress(`Inferring ${count} grounded names with ModelHitch...`);
     }
@@ -87,6 +100,7 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
     const result = await engine.generateNames({
       cwd: targetDir,
       count,
+      crawl,
       context: options.context as string | undefined,
       apiKey: options.key as string | undefined,
       provider: options.provider as string | undefined,

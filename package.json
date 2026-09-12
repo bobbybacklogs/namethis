@@ -27,6 +27,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test dist-test/test/scanner.test.js",
     "start": "node dist/cli.js",
     "dev": "tsc -w",
     "prepublishOnly": "npm run build"
