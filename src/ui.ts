@@ -33,13 +33,11 @@ export function renderProgress(message: string): void {
   console.log(`  ${pc.cyan('●')} ${pc.white(message)}`);
 }
 
-export function renderEvent(type: 'rotation' | 'exhausted' | 'ollama', detail: string): void {
+export function renderEvent(type: 'rotation' | 'exhausted', detail: string): void {
   if (type === 'rotation') {
     console.log(`  ${pc.yellow('↷')} ${pc.dim('Router:')} ${pc.yellow(detail)}`);
   } else if (type === 'exhausted') {
     console.log(`  ${pc.red('■')} ${pc.dim('Exhausted:')} ${pc.red(detail)}`);
-  } else if (type === 'ollama') {
-    console.log(`  ${pc.magenta('⎈')} ${pc.dim('Local:')} ${pc.magenta(detail)}`);
   } else {
     const _exhaustive: never = type;
     void _exhaustive;

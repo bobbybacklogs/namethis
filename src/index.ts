@@ -5,3 +5,4 @@ export * from './ui.js';
 export * from './credentials.js';
 export * from './context-budget.js';
 export * from './errors.js';
+export * from './modelhitch-client.js';

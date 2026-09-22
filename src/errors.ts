@@ -43,7 +43,7 @@ export function formatGenerationFailure(err: unknown): FormattedFailure {
       return {
         message: 'No valid AI credentials were accepted by any provider lane.',
         hint:
-          'Set AI_GATEWAY_API_KEY (https://vercel.com/ai-gateway), pass --key with your gateway key, or ensure local Ollama is running with a model that fits the scan context.',
+          'Set AI_GATEWAY_API_KEY (https://vercel.com/ai-gateway), pass --key with your gateway key, or configure ~/.modelhitch/config.json.',
       };
     }
 
@@ -69,7 +69,7 @@ export function formatGenerationFailure(err: unknown): FormattedFailure {
       return {
         message,
         hint:
-          'Set AI_GATEWAY_API_KEY, pass --key with the same gateway key you use elsewhere, or use a local Ollama model.',
+          'Set AI_GATEWAY_API_KEY, pass --key with the same gateway key you use elsewhere, or configure ~/.modelhitch/config.json.',
       };
     }
     return { message };
