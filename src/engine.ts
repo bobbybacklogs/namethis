@@ -1,21 +1,14 @@
 import {
   ModelHitch,
-  createOllamaProvider,
-  defaultProviders,
-  DEFAULT_FAILOVER_LANES,
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL,
   type ContentPart,
   type FailoverEvent,
   type ExhaustionInfo,
   type ModelInfo,
   type Provider,
 } from 'modelhitch';
-import {
-  findConfiguredProvider,
-  hasCloudCredentials,
-  resolveExplicitApiKey,
-} from './credentials.js';
+import { resolveExplicitApiKey } from './credentials.js';
 import { scanCharBudget } from './context-budget.js';
+import { buildModelHitchClientOptions } from './modelhitch-client.js';
 import { scanDirectory, formatScanContext, ProjectScanResult } from './scanner.js';
 import { getSystemInstructions } from './instructions.js';
 
@@ -34,8 +27,6 @@ export interface GenerateNamesOptions {
   provider?: string;
   model?: string;
   temperature?: number;
-  ollamaHost?: string;
-  ollamaModel?: string;
   onFailover?: (event: FailoverEvent) => void;
   onExhausted?: (info: ExhaustionInfo) => void;
 }
@@ -52,30 +43,18 @@ export interface NameThisEngineOptions {
   apiKey?: string;
   provider?: string;
   model?: string;
-  ollamaHost?: string;
-  ollamaModel?: string;
   onFailover?: (event: FailoverEvent) => void;
   onExhausted?: (info: ExhaustionInfo) => void;
 }
 
-function resolveOllamaHost(host?: string): string {
-  return (host || process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
+function resolveExplicitProvider(provider?: string): string | undefined {
+  const trimmed = provider?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-function resolveDefaultProvider(provider?: string): string {
-  return provider || process.env.NAMETHIS_PROVIDER || 'vercel-ai-gateway';
-}
-
-function resolveDefaultModel(model?: string): string {
-  return model || process.env.NAMETHIS_MODEL || VERCEL_AI_GATEWAY_DEFAULT_MODEL;
-}
-
-function buildProviders(ollamaHost?: string): Provider[] {
-  const host = resolveOllamaHost(ollamaHost);
-  return [
-    ...defaultProviders.filter((provider) => provider.id !== 'ollama'),
-    createOllamaProvider({ baseUrl: host }),
-  ];
+function resolveExplicitModel(model?: string): string | undefined {
+  const trimmed = model?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function extractMessageText(content: string | ContentPart[] | undefined): string {
@@ -89,99 +68,63 @@ function extractMessageText(content: string | ContentPart[] | undefined): string
     .join('');
 }
 
-function pickOllamaModel(available: string[], preferred?: string): string | undefined {
-  if (available.length === 0) return preferred;
-  if (preferred) {
-    if (available.includes(preferred)) return preferred;
-    const tagged = available.find((name) => name === preferred || name.startsWith(`${preferred}:`));
-    if (tagged) return tagged;
-  }
-  return (
-    available.find((name) => name.startsWith('llama3.2')) ||
-    available.find((name) => name.startsWith('llama3')) ||
-    available.find((name) => name.startsWith('llama')) ||
-    available[0]
-  );
-}
-
-async function discoverOllamaModel(host: string, preferred?: string): Promise<string | undefined> {
-  const requested = preferred || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
-  try {
-    const response = await fetch(`${host}/api/tags`);
-    if (!response.ok) return requested;
-    const payload = (await response.json()) as { models?: Array<{ name?: string }> };
-    const names = (payload.models ?? [])
-      .map((model) => model.name?.trim())
-      .filter((name): name is string => Boolean(name));
-    return pickOllamaModel(names, requested) || requested;
-  } catch {
-    return requested;
-  }
-}
-
 export class NameThisEngine {
-  private hitch: ModelHitch;
-  private activeProvider: string;
-  private activeModel: string;
+  private hitch?: ModelHitch;
   private explicitApiKey?: string;
-  private ollamaHost: string;
-  private ollamaModel: string;
   private explicitProvider?: string;
   private explicitModel?: string;
+  private routedProvider?: string;
+  private routedModel?: string;
+  private readonly onFailover?: (event: FailoverEvent) => void;
+  private readonly onExhausted?: (info: ExhaustionInfo) => void;
 
   constructor(options: NameThisEngineOptions = {}) {
     this.explicitApiKey = resolveExplicitApiKey(options.apiKey);
-    this.ollamaHost = resolveOllamaHost(options.ollamaHost);
-    this.ollamaModel = options.ollamaModel || process.env.NAMETHIS_OLLAMA_MODEL || 'llama3.2';
-    this.explicitProvider = options.provider || process.env.NAMETHIS_PROVIDER;
-    this.explicitModel = options.model || process.env.NAMETHIS_MODEL;
-    this.activeProvider = resolveDefaultProvider(this.explicitProvider);
-    this.activeModel = resolveDefaultModel(this.explicitModel);
-
-    this.hitch = this.createHitch({
-      onFailover: options.onFailover,
-      onExhausted: options.onExhausted,
-    });
+    this.explicitProvider = resolveExplicitProvider(
+      options.provider || process.env.NAMETHIS_PROVIDER
+    );
+    this.explicitModel = resolveExplicitModel(options.model || process.env.NAMETHIS_MODEL);
+    this.onFailover = options.onFailover;
+    this.onExhausted = options.onExhausted;
   }
 
-  private createHitch(hooks?: {
-    onFailover?: (event: FailoverEvent) => void;
-    onExhausted?: (info: ExhaustionInfo) => void;
-  }): ModelHitch {
-    return new ModelHitch({
-      providers: buildProviders(this.ollamaHost),
-      defaultProviderId: this.activeProvider,
-      defaultModel: this.activeModel,
-      autoMode: {
-        lanes: [
-          ...DEFAULT_FAILOVER_LANES,
-          { providerId: 'ollama', model: this.ollamaModel },
-        ],
-      },
+  private async ensureHitch(): Promise<ModelHitch> {
+    if (this.hitch) return this.hitch;
+
+    const baseOptions = await buildModelHitchClientOptions();
+    this.hitch = new ModelHitch({
+      ...baseOptions,
       onFailover: (event) => {
-        this.activeProvider = event.to.providerId;
-        this.activeModel = event.to.model;
-        hooks?.onFailover?.(event);
+        this.routedProvider = event.to.providerId;
+        this.routedModel = event.to.model;
+        this.onFailover?.(event);
       },
-      onExhausted: hooks?.onExhausted,
+      onExhausted: this.onExhausted,
     });
-  }
-
-  getModelHitch(): ModelHitch {
     return this.hitch;
   }
 
-  listProviders(): Provider[] {
-    return this.hitch.providers;
+  async getModelHitch(): Promise<ModelHitch> {
+    return this.ensureHitch();
+  }
+
+  async listProviders(): Promise<Provider[]> {
+    const hitch = await this.ensureHitch();
+    return hitch.providers;
   }
 
   async listModels(providerId?: string): Promise<{ providerId: string; models: ModelInfo[] }[]> {
-    const ids = providerId ? [providerId] : ['vercel-ai-gateway', 'ollama'];
+    const hitch = await this.ensureHitch();
+    const ids = providerId ? [providerId] : hitch.providers.map((provider) => provider.id);
 
     const results: { providerId: string; models: ModelInfo[] }[] = [];
     for (const id of ids) {
       try {
-        const models = await this.hitch.listModels(id, this.chatCredentials(id));
+        const explicit = resolveExplicitApiKey(this.explicitApiKey);
+        const models = await hitch.listModels(
+          id,
+          explicit && id === 'vercel-ai-gateway' ? { apiKey: explicit } : undefined
+        );
         results.push({ providerId: id, models });
       } catch {
         results.push({ providerId: id, models: [] });
@@ -190,67 +133,29 @@ export class NameThisEngine {
     return results;
   }
 
-  /** Match Dirgest: only forward an explicit CLI key; otherwise let each provider read env. */
-  private chatCredentials(providerId: string): { apiKey?: string } | undefined {
-    const explicit = resolveExplicitApiKey(this.explicitApiKey);
-    if (!explicit) return undefined;
-    if (providerId === 'vercel-ai-gateway') return { apiKey: explicit };
-    return undefined;
-  }
-
-  private async resolveRouting(options: GenerateNamesOptions): Promise<void> {
-    const providers = buildProviders(this.ollamaHost);
-    const explicitApiKey = resolveExplicitApiKey(options.apiKey);
-    if (explicitApiKey) this.explicitApiKey = explicitApiKey;
-    if (options.ollamaHost) this.ollamaHost = resolveOllamaHost(options.ollamaHost);
-    if (options.provider) this.explicitProvider = options.provider;
-    if (options.model) this.explicitModel = options.model;
-
-    const preferredOllama =
-      options.ollamaModel ||
-      (this.explicitProvider === 'ollama' ? this.explicitModel : undefined) ||
-      process.env.NAMETHIS_OLLAMA_MODEL ||
-      this.ollamaModel;
-
-    this.ollamaModel =
-      (await discoverOllamaModel(this.ollamaHost, preferredOllama)) || preferredOllama || 'llama3.2';
-
-    if (this.explicitProvider) {
-      this.activeProvider = resolveDefaultProvider(this.explicitProvider);
-      this.activeModel =
-        this.activeProvider === 'ollama'
-          ? this.explicitModel || this.ollamaModel
-          : resolveDefaultModel(this.explicitModel);
-      return;
-    }
-
-    const configuredProvider = findConfiguredProvider(providers);
-    if (!hasCloudCredentials(this.explicitApiKey, providers)) {
-      this.activeProvider = 'ollama';
-      this.activeModel = this.ollamaModel;
-      return;
-    }
-
-    this.activeProvider = configuredProvider?.id || resolveDefaultProvider();
-    this.activeModel = resolveDefaultModel(this.explicitModel);
-  }
-
   async generateNames(options: GenerateNamesOptions = {}): Promise<GenerateNamesResult> {
     const targetDir = options.cwd || process.cwd();
     const count = options.count && options.count > 0 ? options.count : 3;
+    const explicitApiKey = resolveExplicitApiKey(options.apiKey ?? this.explicitApiKey);
+    const explicitProvider = resolveExplicitProvider(
+      options.provider ?? this.explicitProvider
+    );
+    const explicitModel = resolveExplicitModel(options.model ?? this.explicitModel);
 
-    await this.resolveRouting(options);
+    if (explicitApiKey) this.explicitApiKey = explicitApiKey;
+    if (explicitProvider) this.explicitProvider = explicitProvider;
+    if (explicitModel) this.explicitModel = explicitModel;
 
-    this.hitch = this.createHitch({
-      onFailover: options.onFailover,
-      onExhausted: options.onExhausted,
-    });
+    this.routedProvider = explicitProvider;
+    this.routedModel = explicitModel;
+
+    const hitch = await this.ensureHitch();
 
     const scan = await scanDirectory(targetDir, { crawl: options.crawl });
     const systemInstructions = getSystemInstructions();
     const scannedContext = formatScanContext(scan, {
       customContext: options.context,
-      maxChars: scanCharBudget(this.activeProvider, this.activeModel),
+      maxChars: scanCharBudget(explicitProvider || 'vercel-ai-gateway', explicitModel),
     });
 
     const prompt = `You are namethis, an intelligent repo-aware naming tool.
@@ -289,13 +194,9 @@ FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS (valid JSON array of objects):
 
 Respond ONLY with the JSON code block.`;
 
-    const providerUsed = this.activeProvider;
-    const modelUsed = this.activeModel;
-    const explicitApiKey = resolveExplicitApiKey(options.apiKey ?? this.explicitApiKey);
-
-    const response = await this.hitch.chat({
-      provider: providerUsed,
-      model: modelUsed,
+    const response = await hitch.chat({
+      ...(explicitProvider ? { provider: explicitProvider } : {}),
+      ...(explicitModel ? { model: explicitModel } : {}),
       ...(explicitApiKey ? { apiKey: explicitApiKey } : {}),
       temperature: options.temperature ?? 0.7,
       messages: [
@@ -311,8 +212,8 @@ Respond ONLY with the JSON code block.`;
       scan,
       rawResponse: text,
       suggestions,
-      modelUsed: this.activeModel,
-      providerUsed: this.activeProvider,
+      modelUsed: this.routedModel || explicitModel || hitch.defaultModel,
+      providerUsed: this.routedProvider || explicitProvider || hitch.defaultProviderId,
     };
   }
 
@@ -391,8 +292,6 @@ export async function generateNames(options: GenerateNamesOptions = {}): Promise
     apiKey: options.apiKey,
     provider: options.provider,
     model: options.model,
-    ollamaHost: options.ollamaHost,
-    ollamaModel: options.ollamaModel,
     onFailover: options.onFailover,
     onExhausted: options.onExhausted,
   });

@@ -13,7 +13,7 @@
 
 `namethis` is a lightweight, repo-aware naming tool that looks at the project in your current directory, figures out what you’re building, and suggests 2–3 strong names with a short rationale for each.
 
-It uses [ModelHitch](https://github.com/bobbybacklogs/ModelHitch) to hitch any model via Vercel AI Gateway (BYOK), with automatic failover and optional local Ollama fallback.
+It uses [ModelHitch](https://github.com/bobbybacklogs/ModelHitch) for provider routing, failover, and BYOK credentials (`~/.modelhitch/config.json` policy or `autoMode`).
 
 ---
 
@@ -22,7 +22,7 @@ It uses [ModelHitch](https://github.com/bobbybacklogs/ModelHitch) to hitch any m
 - **Repo-Aware Context**: Automatically analyzes project structure, file signatures, manifests, and documentation.
 - **Deep Crawl Mode**: Optional `--crawl` walks the tree with bounded depth, file count, and excerpt size for richer naming context.
 - **Grounded Suggestions**: Curates 2–3 strong, realistic name options (avoiding generic AI buzzwords or cliché patterns).
-- **ModelHitch Routing**: Chat through Vercel AI Gateway with BYOK, lane failover, and Ollama as a local fallback.
+- **ModelHitch Routing**: Uses ModelHitch policy or `autoMode` for provider/model selection and failover — no custom env scanning or fallback lanes in namethis.
 - **Clean CLI Experience**: Monospace, distraction-free terminal formatting with zero emojis.
 - **Dual Support**: Use directly from your terminal with `npx` or import programmatically in TypeScript / JavaScript.
 
@@ -58,10 +58,10 @@ export AI_GATEWAY_API_KEY=…   # from https://vercel.com/ai-gateway
 # or pass the same key with: namethis --key "$AI_GATEWAY_API_KEY"
 ```
 
-Optional local fallback:
+Optional ModelHitch config (same as other ModelHitch tools):
 
 ```bash
-export OLLAMA_HOST=http://localhost:11434
+# ~/.modelhitch/config.json — policy, keys, default provider/model
 ```
 
 ---
@@ -87,10 +87,8 @@ namethis ./path/to/project
 | `-c, --count <n>` | Number of name candidates (default: 3) |
 | `--context <text>` | Extra background, audience, or product nuances |
 | `-k, --key <api-key>` | AI Gateway API key (`AI_GATEWAY_API_KEY`) |
-| `-p, --provider <id>` | Primary ModelHitch provider (default: `vercel-ai-gateway`) |
+| `-p, --provider <id>` | Override ModelHitch provider (otherwise uses ModelHitch routing policy) |
 | `-m, --model <id>` | Model override (e.g. `openai/gpt-5.4`) |
-| `--ollama <host>` | Ollama host for local fallback |
-| `--ollama-model <tag>` | Ollama model tag (default: `llama3.2`) |
 | `--inspect` | Preview scanned files and metadata without querying models |
 | `--crawl` | Deep-crawl the directory tree for richer naming context (bounded depth, file count, and size) |
 | `--json` | Return output in raw JSON format |

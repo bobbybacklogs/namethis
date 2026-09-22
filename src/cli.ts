@@ -32,11 +32,9 @@ program
   .option('-c, --count <number>', 'Number of name suggestions to generate (default: 3)', '3')
   .option('--context <text>', 'Additional context, target audience, or requirements')
   .option('-k, --key <api-key>', 'AI Gateway API key (or set AI_GATEWAY_API_KEY env)')
-  .option('-p, --provider <provider>', 'Primary ModelHitch provider (default: vercel-ai-gateway)')
-  .option('-m, --model <model>', 'Specific model override (e.g. openai/gpt-5.4)')
+  .option('-p, --provider <provider>', 'Override ModelHitch provider (otherwise uses ModelHitch routing policy)')
+  .option('-m, --model <model>', 'Override ModelHitch model (e.g. openai/gpt-5.4)')
   .option('-t, --temperature <number>', 'Temperature for generation (default: 0.7)', '0.7')
-  .option('--ollama <host>', 'Custom Ollama host for local fallback (default: http://localhost:11434)')
-  .option('--ollama-model <model>', 'Ollama model tag used on local fallback (default: llama3.2)')
   .option('--json', 'Output results purely in JSON format for scripting/piping')
   .option('--inspect', 'Only inspect and print scanned directory context without making LLM calls')
   .option('--crawl', 'Deep-crawl the directory tree for richer naming context (bounded depth, file count, and size)')
@@ -88,8 +86,6 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
       apiKey: options.key as string | undefined,
       provider: options.provider as string | undefined,
       model: options.model as string | undefined,
-      ollamaHost: options.ollama as string | undefined,
-      ollamaModel: options.ollamaModel as string | undefined,
     });
 
     if (!isJson) {
@@ -107,8 +103,6 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
       provider: options.provider as string | undefined,
       model: options.model as string | undefined,
       temperature,
-      ollamaHost: options.ollama as string | undefined,
-      ollamaModel: options.ollamaModel as string | undefined,
       onFailover: (event) => {
         if (!isJson) {
           const reason = event.error.message || event.error.code;
@@ -116,9 +110,6 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
             'rotation',
             `${event.from.providerId}/${event.from.model} -> ${event.to.providerId}/${event.to.model} (${reason})`
           );
-          if (event.to.providerId === 'ollama') {
-            renderEvent('ollama', `Switched to Ollama (${event.to.model})`);
-          }
         }
       },
       onExhausted: (info) => {
@@ -131,10 +122,6 @@ program.action(async (dir: string, options: Record<string, unknown>) => {
         }
       },
     });
-
-    if (!isJson && result.providerUsed === 'ollama') {
-      renderEvent('ollama', `Using ${result.providerUsed}/${result.modelUsed}`);
-    }
 
     if (isJson) {
       console.log(
@@ -172,18 +159,16 @@ program
   .description('List ModelHitch providers and discoverable models')
   .option('-p, --provider <provider>', 'Only list models for a specific provider')
   .option('-k, --key <api-key>', 'AI Gateway API key (or set AI_GATEWAY_API_KEY env)')
-  .option('--ollama <host>', 'Custom Ollama host (default: http://localhost:11434)')
   .action(async (options: Record<string, unknown>) => {
     try {
       const engine = new NameThisEngine({
         apiKey: options.key as string | undefined,
-        ollamaHost: options.ollama as string | undefined,
       });
 
       renderHeader();
       console.log(`  ${pc.bold('MODELHITCH PROVIDERS')}`);
       console.log(`  ${pc.dim('─'.repeat(50))}`);
-      for (const provider of engine.listProviders()) {
+      for (const provider of await engine.listProviders()) {
         console.log(`  ${pc.green('[READY]')} ${pc.bold(pc.white(provider.id))}`);
       }
 
@@ -207,7 +192,7 @@ program
       console.log(`  ${pc.dim('─'.repeat(50))}\n`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      renderError(message, 'Gateway listing needs AI_GATEWAY_API_KEY; Ollama listing needs a running Ollama host.');
+      renderError(message, 'Model listing needs credentials for the selected provider (for example AI_GATEWAY_API_KEY).');
       process.exit(1);
     }
   });
